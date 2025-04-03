@@ -1,0 +1,111 @@
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import neattext.functions as nfx
+import joblib
+import re
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import LabelEncoder
+from imblearn.over_sampling import SMOTE
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
+import matplotlib.pyplot as plt
+
+# Load dataset
+df = pd.read_csv("C:/Users/LENOVO/OneDrive/Desktop/tweet_emotions.csv")
+
+# Show dataset info
+print(df.head())
+print(df.isnull().sum())
+print(df.duplicated().sum())
+print(df['sentiment'].value_counts())
+
+# Plot emotion distribution
+sns.countplot(x=df['sentiment'])
+plt.title("Emotion Distribution")
+plt.show()
+
+# Function to clean text
+def clean_text(text):
+    text = text.lower()  # Convert to lowercase
+    text = nfx.remove_urls(text)  # Remove URLs
+    text = nfx.remove_puncts(text)  # Remove punctuations
+    text = nfx.remove_stopwords(text)  # Remove stopwords
+    text = re.sub(r'\d+', '', text)  # Remove numbers
+    text = re.sub(r'\s+', ' ', text).strip()  # Remove extra spaces
+    return text
+
+df['cleaned_text'] = df['content'].apply(clean_text)
+
+# Encode sentiment labels
+encoder = LabelEncoder()
+df['emotion_label'] = encoder.fit_transform(df['sentiment'])
+
+# Save label encoder
+joblib.dump(encoder.classes_, "label_encoder.pkl")
+
+# Prepare data
+X = df['cleaned_text']
+y = df['emotion_label']
+
+# Split dataset
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# TF-IDF Vectorization with improved features
+vectorizer = TfidfVectorizer(max_features=10000, ngram_range=(1,2))  # Increased features & added bigrams
+X_train_tfidf = vectorizer.fit_transform(X_train)
+X_test_tfidf = vectorizer.transform(X_test)
+
+# Save vectorizer
+joblib.dump(vectorizer, "tfidf_vectorizer.pkl")
+
+# Apply SMOTE to balance dataset
+smote = SMOTE(random_state=42)
+X_train_resampled, y_train_resampled = smote.fit_resample(X_train_tfidf, y_train)
+
+# Hyperparameter tuning for RandomForest
+param_grid = {
+    'n_estimators': [100, 200],  # Number of trees
+    'max_depth': [None, 20, 30],  # Depth of trees
+    'min_samples_split': [2, 5],  # Min samples required to split
+    'min_samples_leaf': [1, 2],  # Min samples per leaf
+}
+
+rf_model = RandomForestClassifier(random_state=42, n_jobs=-1)
+grid_search = GridSearchCV(rf_model, param_grid, cv=3, n_jobs=-1, verbose=2)
+grid_search.fit(X_train_resampled, y_train_resampled)
+
+# Best model after tuning
+best_rf_model = grid_search.best_estimator_
+
+# Save trained model
+joblib.dump(best_rf_model, "emotion_classifier.pkl")
+
+# Make predictions
+y_pred = best_rf_model.predict(X_test_tfidf)
+
+# Evaluate model
+accuracy = accuracy_score(y_test, y_pred)
+print(f"✅ Model Accuracy: {accuracy:.2f}")
+print(classification_report(y_test, y_pred))
+
+# Load Model for Testing
+loaded_model = joblib.load("emotion_classifier.pkl")
+loaded_vectorizer = joblib.load("tfidf_vectorizer.pkl")
+encoder = LabelEncoder()
+encoder.classes_ = joblib.load("label_encoder.pkl")
+
+print("✅ Model, Vectorizer, and Label Encoder Loaded Successfully!")
+
+# Real-time Emotion Detection
+while True:
+    user_text = input("\nEnter a sentence to analyze emotion (or type 'exit' to stop): ")
+    if user_text.lower() == "exit":
+        break
+
+    user_features = loaded_vectorizer.transform([user_text])
+    predicted_emotion = loaded_model.predict(user_features)
+    predicted_label = encoder.inverse_transform(predicted_emotion)
+    print(f"🧠 Predicted Emotion: {predicted_label[0]}\n")
